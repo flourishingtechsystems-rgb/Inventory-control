@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { NewItemForm } from "./NewItemForm";
+import { ImportCsvForm } from "./ImportCsvForm";
 import { toggleActive, deleteItem } from "./actions";
 
 export default async function InventoryCatalogPage() {
@@ -17,8 +18,12 @@ export default async function InventoryCatalogPage() {
         Items requesters can choose from when submitting an order.
       </p>
 
-      <div className="mb-8">
+      <div className="mb-4">
         <NewItemForm />
+      </div>
+
+      <div className="mb-8">
+        <ImportCsvForm />
       </div>
 
       <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white">

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { parse } from "csv-parse/sync";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -44,6 +45,78 @@ export async function toggleActive(itemId: string, active: boolean) {
     data: { active },
   });
   revalidatePath("/admin/items");
+}
+
+export type ImportState = { error?: string; success?: string } | undefined;
+
+type CsvRow = { name?: string; unit?: string; category?: string };
+
+export async function importItemsCsv(
+  _prevState: ImportState,
+  formData: FormData,
+): Promise<ImportState> {
+  await requireAdmin();
+
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "Choose a CSV file to upload." };
+  }
+
+  const text = await file.text();
+  let rows: CsvRow[];
+  try {
+    rows = parse(text, {
+      columns: (header: string[]) => header.map((h) => h.trim().toLowerCase()),
+      skip_empty_lines: true,
+      trim: true,
+    }) as CsvRow[];
+  } catch (e) {
+    return { error: `Could not parse CSV: ${(e as Error).message}` };
+  }
+
+  if (rows.length === 0) {
+    return { error: "The CSV file has no data rows." };
+  }
+
+  let created = 0;
+  let updated = 0;
+  const rowErrors: string[] = [];
+
+  for (const [index, row] of rows.entries()) {
+    const name = row.name?.trim();
+    const unit = row.unit?.trim();
+    const category = row.category?.trim() || null;
+
+    if (!name || !unit) {
+      rowErrors.push(`Row ${index + 2}: name and unit are required.`);
+      continue;
+    }
+
+    const existing = await prisma.inventoryItem.findUnique({
+      where: { name_unit: { name, unit } },
+    });
+
+    if (existing) {
+      await prisma.inventoryItem.update({
+        where: { id: existing.id },
+        data: { category, active: true },
+      });
+      updated += 1;
+    } else {
+      await prisma.inventoryItem.create({ data: { name, unit, category } });
+      created += 1;
+    }
+  }
+
+  revalidatePath("/admin/items");
+
+  const summary = `Imported ${created + updated} item${created + updated === 1 ? "" : "s"} (${created} added, ${updated} updated).`;
+  if (rowErrors.length > 0) {
+    return {
+      error: `${summary} ${rowErrors.length} row${rowErrors.length === 1 ? "" : "s"} skipped: ${rowErrors.join(" ")}`,
+    };
+  }
+  return { success: summary };
 }
 
 export async function deleteItem(itemId: string) {

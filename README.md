@@ -13,8 +13,12 @@ purchases (toilet paper, paper towels, office supplies, etc.).
    shows up on the finance purchase-frequency dashboard — how often each item
    is ordered, total quantity, and when it was last ordered — for budgeting
    and oversight.
-4. **Admins** manage the inventory catalog (add items, deactivate ones no
-   longer purchased) and can see every area of the app.
+4. **Admins** manage the inventory catalog — add items one at a time, or bulk
+   import via CSV upload (columns: `name`, `unit`, `category`; a
+   [template](public/inventory-template.csv) is downloadable from the page).
+   Rows matching an existing item (by name + unit) update it; new rows are
+   added. Admins can also deactivate items no longer purchased and see every
+   area of the app.
 
 Notifications are in-app only (a badge in the nav bar); there's no email/SMS
 integration.
