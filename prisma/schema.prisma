@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum Role {
+  REQUESTER
+  MANAGER
+  FINANCE
+  ADMIN
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id            String         @id @default(cuid())
+  name          String
+  email         String         @unique
+  passwordHash  String
+  role          Role
+  createdAt     DateTime       @default(now())
+
+  requests      OrderRequest[] @relation("RequesterRequests")
+  decisions     OrderRequest[] @relation("DeciderRequests")
+  notifications Notification[]
+}
+
+model InventoryItem {
+  id        String              @id @default(cuid())
+  name      String
+  unit      String
+  category  String?
+  active    Boolean             @default(true)
+  createdAt DateTime            @default(now())
+
+  lines     OrderRequestItem[]
+
+  @@unique([name, unit])
+}
+
+model OrderRequest {
+  id             String         @id @default(cuid())
+  requesterId    String
+  requester      User           @relation("RequesterRequests", fields: [requesterId], references: [id])
+  status         RequestStatus  @default(PENDING)
+  notes          String?
+  createdAt      DateTime       @default(now())
+  decidedAt      DateTime?
+  decidedById    String?
+  decidedBy      User?          @relation("DeciderRequests", fields: [decidedById], references: [id])
+  decisionNote   String?
+
+  items          OrderRequestItem[]
+
+  @@index([status])
+  @@index([requesterId])
+}
+
+model OrderRequestItem {
+  id              String        @id @default(cuid())
+  orderRequestId  String
+  orderRequest    OrderRequest  @relation(fields: [orderRequestId], references: [id], onDelete: Cascade)
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  quantity        Int
+
+  @@index([inventoryItemId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  message   String
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
