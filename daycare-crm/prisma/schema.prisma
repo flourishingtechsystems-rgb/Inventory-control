@@ -63,6 +63,7 @@ model User {
   leadActivities LeadActivity[]
   staffShifts    StaffShift[]
   messages       Message[]
+  caregiving     ChildMovement[]
 }
 
 model Classroom {
@@ -81,6 +82,7 @@ model Classroom {
   feePlans     FeePlan[]
   leads        Lead[]
   journalLines JournalLine[]
+  area         Area?
 }
 
 enum FamilyStatus {
@@ -142,8 +144,11 @@ model Child {
   enrollments  Enrollment[]
   attendance   Attendance[]
   invoiceLines InvoiceLine[]
+  movements    ChildMovement[]
 }
 
+// One drop-off → pick-up session. A child can have several in a day (e.g.
+// leaves for an appointment and comes back).
 model Attendance {
   id           String    @id @default(cuid())
   childId      String
@@ -154,12 +159,51 @@ model Attendance {
   day          DateTime
   checkInAt    DateTime
   checkOutAt   DateTime?
+  // Who brought the child in / took them home (guardian or authorized adult).
+  droppedOffBy String?
+  pickedUpBy   String?
+  // Staff member who recorded each event.
   checkInBy    String?
   checkOutBy   String?
-  pickedUpBy   String?
 
-  @@unique([childId, day])
+  movements ChildMovement[]
+
+  @@index([childId, day])
   @@index([classroomId, day])
+}
+
+// A physical space in the center: a classroom, the playground, nap room...
+model Area {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  // Set when this area is a classroom's home room.
+  classroomId String?    @unique
+  classroom   Classroom? @relation(fields: [classroomId], references: [id])
+  active      Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+
+  movements ChildMovement[]
+}
+
+// Where a child was, and who was responsible for them, from startedAt until
+// endedAt. Open (endedAt null) = where the child is right now.
+model ChildMovement {
+  id           String     @id @default(cuid())
+  attendanceId String
+  attendance   Attendance @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+  childId      String
+  child        Child      @relation(fields: [childId], references: [id], onDelete: Cascade)
+  areaId       String
+  area         Area       @relation(fields: [areaId], references: [id])
+  caregiverId  String?
+  caregiver    User?      @relation(fields: [caregiverId], references: [id])
+  startedAt    DateTime
+  endedAt      DateTime?
+  recordedBy   String?
+
+  @@index([childId, startedAt])
+  @@index([areaId, endedAt])
+  @@index([caregiverId, endedAt])
 }
 
 model StaffShift {

@@ -13,6 +13,7 @@ export function ActionForm({
   buttonClassName = btnPrimary,
   confirm,
   onSuccess,
+  id,
 }: {
   action: (state: ActionState, formData: FormData) => Promise<ActionState>;
   children?: ReactNode;
@@ -22,6 +23,7 @@ export function ActionForm({
   buttonClassName?: string;
   confirm?: string;
   onSuccess?: () => void;
+  id?: string;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction, pending] = useActionState(async (prev: ActionState, formData: FormData) => {
@@ -35,6 +37,7 @@ export function ActionForm({
 
   return (
     <form
+      id={id}
       ref={formRef}
       className={className}
       // Submitting manually (instead of <form action>) stops React from

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
 import { formatCents } from "@/lib/money";
-import { formatDay, today } from "@/lib/dates";
+import { formatDay, formatTime, today } from "@/lib/dates";
 import { payerStatement } from "@/lib/accounting/statement";
 import { payerLedgerBalance } from "@/lib/accounting/receivables";
 import { ActionForm } from "@/components/ActionForm";
@@ -21,7 +21,16 @@ export default async function PortalPage(props: PageProps<"/portal">) {
           payer: true,
           family: {
             include: {
-              children: { include: { classroom: true, attendance: { where: { day: today() } } } },
+              children: {
+                include: {
+                  classroom: true,
+                  attendance: {
+                    where: { day: today() },
+                    orderBy: { checkInAt: "desc" },
+                    include: { movements: { include: { area: true, caregiver: true }, orderBy: { startedAt: "asc" } } },
+                  },
+                },
+              },
               messages: { include: { author: true }, orderBy: { createdAt: "desc" }, take: 15 },
             },
           },
@@ -47,6 +56,7 @@ export default async function PortalPage(props: PageProps<"/portal">) {
           <div className="grid gap-4 sm:grid-cols-2">
             {guardian.family.children.map((c) => {
               const a = c.attendance[0];
+              const now = a && !a.checkOutAt ? a.movements.find((m) => !m.endedAt) : undefined;
               return (
                 <Card key={c.id}>
                   <div className="flex items-center justify-between">
@@ -55,13 +65,27 @@ export default async function PortalPage(props: PageProps<"/portal">) {
                       <div className="text-xs text-zinc-500">{c.classroom?.name}</div>
                     </div>
                     {a && !a.checkOutAt ? (
-                      <Badge tone="green">Checked in {a.checkInAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</Badge>
+                      <Badge tone="green">Here since {formatTime(a.checkInAt)}</Badge>
                     ) : a?.checkOutAt ? (
-                      <Badge>Picked up</Badge>
+                      <Badge>Picked up {formatTime(a.checkOutAt)}</Badge>
                     ) : (
                       <Badge tone="amber">Not checked in</Badge>
                     )}
                   </div>
+                  {now && (
+                    <p className="mt-3 rounded-md bg-emerald-50 px-2 py-1.5 text-sm text-emerald-900">
+                      📍 {now.area.name}{now.caregiver ? ` with ${now.caregiver.name}` : ""}
+                    </p>
+                  )}
+                  {a && (
+                    <ul className="mt-2 space-y-0.5 text-xs text-zinc-500">
+                      <li>{formatTime(a.checkInAt)} dropped off by {a.droppedOffBy ?? "—"}</li>
+                      {a.movements.slice(1).map((m) => (
+                        <li key={m.id}>{formatTime(m.startedAt)} {m.area.name}{m.caregiver ? ` with ${m.caregiver.name}` : ""}</li>
+                      ))}
+                      {a.checkOutAt && <li>{formatTime(a.checkOutAt)} picked up by {a.pickedUpBy ?? "—"}</li>}
+                    </ul>
+                  )}
                 </Card>
               );
             })}

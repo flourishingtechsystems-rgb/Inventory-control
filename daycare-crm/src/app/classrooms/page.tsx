@@ -5,11 +5,15 @@ import { CLASSROOM, STAFF } from "@/lib/roles";
 import { today } from "@/lib/dates";
 import { ActionForm } from "@/components/ActionForm";
 import { Badge, Card, Field, Page, PageHeader, inputCls, linkCls, tdCls, tdRight, thCls, thRight, trCls } from "@/components/ui";
-import { createClassroom } from "../attendance/actions";
+import { createArea, createClassroom, toggleArea } from "../attendance/actions";
 
 export default async function ClassroomsPage() {
   const user = await requireRole(CLASSROOM);
   const day = today();
+  const areas = await prisma.area.findMany({
+    include: { movements: { where: { endedAt: null } } },
+    orderBy: [{ classroomId: "asc" }, { name: "asc" }],
+  });
   const rooms = await prisma.classroom.findMany({
     include: {
       children: { where: { status: { in: ["ENROLLED", "WAITLIST"] } } },
@@ -60,6 +64,30 @@ export default async function ClassroomsPage() {
             })}
           </tbody>
         </table>
+      </Card>
+      <Card title="Areas" className="mt-6" actions={<Link href="/attendance/live" className={`text-sm ${linkCls}`}>Where is everyone →</Link>}>
+        <p className="mb-3 text-sm text-zinc-500">
+          Every space children can be in. Each classroom has a home area; add shared spaces like the playground, gym or nap room so staff can log moves.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {areas.map((a) => (
+            <span key={a.id} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm ${a.active ? "border-zinc-200" : "border-dashed border-zinc-200 text-zinc-400"}`}>
+              {a.name}
+              {a.classroomId ? <Badge tone="teal">home room</Badge> : null}
+              <Badge>{a.movements.length} here</Badge>
+              {!a.classroomId && STAFF.includes(user.role) && (
+                <form action={toggleArea.bind(null, a.id)}>
+                  <button className="text-xs text-zinc-500 hover:text-zinc-800">{a.active ? "Retire" : "Restore"}</button>
+                </form>
+              )}
+            </span>
+          ))}
+        </div>
+        {STAFF.includes(user.role) && (
+          <ActionForm action={createArea} submitLabel="Add area" className="mt-4 flex max-w-md items-end gap-2">
+            <Field label="New area"><input name="name" placeholder="Playground, Gym, Nap Room…" required className={inputCls} /></Field>
+          </ActionForm>
+        )}
       </Card>
       {STAFF.includes(user.role) && (
         <Card title="New classroom" className="mt-6 max-w-2xl">

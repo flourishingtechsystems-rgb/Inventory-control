@@ -2,6 +2,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { AccountingError, PeriodLockedError } from "@/lib/accounting/posting";
 import { UnbalancedEntryError } from "@/lib/accounting/ledger";
 import { NotAuthorizedError } from "@/lib/session";
+import { AttendanceError } from "@/lib/attendance";
 
 export type ActionState = { error?: string; ok?: string } | undefined;
 
@@ -11,7 +12,8 @@ export function toActionError(error: unknown): ActionState {
     error instanceof AccountingError ||
     error instanceof PeriodLockedError ||
     error instanceof UnbalancedEntryError ||
-    error instanceof NotAuthorizedError
+    error instanceof NotAuthorizedError ||
+    error instanceof AttendanceError
   ) {
     return { error: error.message };
   }

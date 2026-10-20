@@ -10,10 +10,19 @@ export function toDay(date: Date): Date {
   );
 }
 
+/** Calendar day (server local time) that an instant falls on. */
+export function dayOf(instant: Date): Date {
+  return new Date(Date.UTC(instant.getFullYear(), instant.getMonth(), instant.getDate()));
+}
+
 /** Today's calendar day in the server's local time zone. */
 export function today(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  return dayOf(new Date());
+}
+
+export function formatTime(instant: Date | null | undefined): string {
+  if (!instant) return "—";
+  return instant.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
 export function parseDay(value: string): Date | null {

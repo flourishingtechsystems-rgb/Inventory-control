@@ -16,6 +16,8 @@ const SECTIONS: { heading: string; links: { href: string; label: string }[] }[] 
     heading: "Classrooms",
     links: [
       { href: "/attendance", label: "Check-in / out" },
+      { href: "/attendance/live", label: "Where is everyone" },
+      { href: "/attendance/log", label: "Daily log" },
       { href: "/classrooms", label: "Rooms & Ratios" },
     ],
   },

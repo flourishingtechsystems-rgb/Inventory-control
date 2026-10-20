@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
 import { FINANCE, STAFF } from "@/lib/roles";
 import { formatCents } from "@/lib/money";
-import { daysBetween, formatDay, formatDayISO, today } from "@/lib/dates";
+import { daysBetween, formatDay, formatDayISO, formatTime, today } from "@/lib/dates";
 import { payerStatement } from "@/lib/accounting/statement";
 import { payerLedgerBalance } from "@/lib/accounting/receivables";
 import { ActionForm } from "@/components/ActionForm";
@@ -28,6 +28,11 @@ export default async function FamilyPage(props: PageProps<"/families/[id]">) {
       children: {
         include: {
           classroom: true,
+          attendance: {
+            orderBy: { checkInAt: "desc" },
+            take: 10,
+            include: { movements: { where: { endedAt: null }, include: { area: true, caregiver: true } } },
+          },
           enrollments: { include: { feePlan: true, splits: { include: { payer: true } } }, orderBy: { startDate: "desc" } },
         },
       },
@@ -79,6 +84,7 @@ export default async function FamilyPage(props: PageProps<"/families/[id]">) {
                     {child.allergies && <Badge tone="red">Allergy: {child.allergies}</Badge>}
                     {child.immunizationsDue && <Badge tone="amber">Immunizations due {formatDay(child.immunizationsDue)}</Badge>}
                   </div>
+                  <TodayLine child={child} />
                   {child.enrollments.length > 0 && (
                     <ul className="mt-2 space-y-2">
                       {child.enrollments.map((e) => (
@@ -165,6 +171,37 @@ export default async function FamilyPage(props: PageProps<"/families/[id]">) {
                 </ActionForm>
               </details>
             )}
+          </Card>
+
+          <Card title="Drop-off & pick-up history" flush>
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className={thCls}>Date</th>
+                  <th className={thCls}>Child</th>
+                  <th className={thCls}>Dropped off</th>
+                  <th className={thCls}>Picked up</th>
+                </tr>
+              </thead>
+              <tbody>
+                {family.children
+                  .flatMap((c) => c.attendance.map((a) => ({ ...a, childName: c.firstName })))
+                  .sort((a, b) => b.checkInAt.getTime() - a.checkInAt.getTime())
+                  .slice(0, 12)
+                  .map((a) => (
+                    <tr key={a.id} className={trCls}>
+                      <td className={tdDate}>
+                        <Link href={`/attendance/log?day=${formatDayISO(a.day)}`} className={linkCls}>{formatDay(a.day)}</Link>
+                      </td>
+                      <td className={tdCls}>{a.childName}</td>
+                      <td className={tdCls}>{formatTime(a.checkInAt)} <span className="text-xs text-zinc-500">by {a.droppedOffBy ?? "—"}</span></td>
+                      <td className={tdCls}>
+                        {a.checkOutAt ? <>{formatTime(a.checkOutAt)} <span className="text-xs text-zinc-500">by {a.pickedUpBy ?? "—"}</span></> : <Badge tone="green">still here</Badge>}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
           </Card>
 
           <Card title="Account statement" flush>
@@ -288,5 +325,36 @@ export default async function FamilyPage(props: PageProps<"/families/[id]">) {
         </div>
       </div>
     </Page>
+  );
+}
+
+function TodayLine({
+  child,
+}: {
+  child: {
+    attendance: {
+      day: Date;
+      checkInAt: Date;
+      checkOutAt: Date | null;
+      droppedOffBy: string | null;
+      pickedUpBy: string | null;
+      movements: { area: { name: string }; caregiver: { name: string } | null; startedAt: Date }[];
+    }[];
+  };
+}) {
+  const a = child.attendance.find((x) => x.day.getTime() === today().getTime());
+  if (!a) return <p className="mt-1 text-xs text-zinc-500">Not checked in today.</p>;
+  if (a.checkOutAt) {
+    return (
+      <p className="mt-1 text-xs text-zinc-500">
+        Today: dropped off {formatTime(a.checkInAt)} by {a.droppedOffBy ?? "—"} · picked up {formatTime(a.checkOutAt)} by {a.pickedUpBy ?? "—"}
+      </p>
+    );
+  }
+  const m = a.movements[0];
+  return (
+    <p className="mt-1 text-xs text-emerald-800">
+      Here now{m ? <> · 📍 {m.area.name}{m.caregiver ? ` with ${m.caregiver.name}` : ""} since {formatTime(m.startedAt)}</> : null} · dropped off {formatTime(a.checkInAt)} by {a.droppedOffBy ?? "—"}
+    </p>
   );
 }

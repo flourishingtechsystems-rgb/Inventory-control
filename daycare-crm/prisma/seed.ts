@@ -6,6 +6,7 @@ import { systemAccounts } from "../src/lib/accounting/posting";
 import { postBillingRun } from "../src/lib/accounting/billing-run";
 import { createAdjustment, createDeposit, createInvoice, recordPayment } from "../src/lib/accounting/receivables";
 import { addDays, monthPeriod, today } from "../src/lib/dates";
+import { checkInChild, checkOutChild, homeArea, moveChildren } from "../src/lib/attendance";
 import type { Role } from "../src/lib/roles";
 
 const DEMO_PASSWORD = "password123";
@@ -286,16 +287,59 @@ async function main() {
     });
   }
 
-  // Today's attendance.
-  const kids = await prisma.child.findMany({ where: { NOT: { firstName: "Arjun" } } });
-  const morning = new Date();
-  morning.setHours(7, 45, 0, 0);
-  for (const kid of kids.slice(0, kids.length - 1)) {
-    await prisma.attendance.create({
-      data: { childId: kid.id, classroomId: kid.classroomId!, day: now, checkInAt: morning, checkInBy: "Parent kiosk" },
-    });
+  // Areas: each classroom's home room plus shared spaces.
+  for (const room of Object.values(rooms)) await homeArea(prisma, room.id);
+  const area = {
+    playground: await prisma.area.create({ data: { name: "Playground" } }),
+    gym: await prisma.area.create({ data: { name: "Gym" } }),
+    nap: await prisma.area.create({ data: { name: "Nap Room" } }),
+    art: await prisma.area.create({ data: { name: "Art Studio" } }),
+  };
+
+  // Staff on the floor.
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+  const omar = await prisma.user.findUniqueOrThrow({ where: { email: "omar@demo.com" } });
+  const ines = await user("Ines Infant", "ines@demo.com", "TEACHER", { classroomId: rooms.infants.id });
+  for (const [u, room] of [[teacher, rooms.toddlers], [omar, rooms.preschool], [ines, rooms.infants]] as const) {
+    await prisma.staffShift.create({ data: { userId: u.id, classroomId: room.id, clockInAt: ago(300) } });
   }
-  await prisma.staffShift.create({ data: { userId: teacher.id, classroomId: rooms.toddlers.id, clockInAt: morning } });
+
+  const kid = (firstName: string) => prisma.child.findFirstOrThrow({ where: { firstName } });
+  const [sofia, mateo, leo, mia, nora, emma] = await Promise.all(["Sofia", "Mateo", "Leo", "Mia", "Nora", "Emma"].map(kid));
+
+  // Yesterday: a full day with moves and pickups, for the daily log.
+  const y = (h: number, m = 0) => {
+    const d = addDays(new Date(), -1);
+    d.setHours(h, m, 0, 0);
+    return d;
+  };
+  const yesterday: [typeof sofia, string, string, Date, Date][] = [
+    [sofia, "Maria Garcia", "Luis Garcia", y(7, 40), y(17, 5)],
+    [mateo, "Maria Garcia", "Luis Garcia", y(7, 41), y(17, 5)],
+    [leo, "Daniel Park", "Wei Chen", y(8, 10), y(16, 20)],
+    [mia, "Keisha Johnson", "Keisha Johnson", y(7, 55), y(17, 30)],
+    [nora, "Sean O'Brien", "Sean O'Brien", y(8, 30), y(15, 45)],
+    [emma, "Thanh Nguyen", "Thanh Nguyen", y(9, 0), y(16, 0)],
+  ];
+  for (const [child, dropper, , inAt] of yesterday) {
+    await checkInChild(prisma, { childId: child.id, droppedOffBy: dropper, recordedBy: "Front desk", at: inAt });
+  }
+  await moveChildren(prisma, { childIds: [sofia.id, leo.id, nora.id], areaId: area.playground.id, recordedBy: omar.name, at: y(10) });
+  await moveChildren(prisma, { childIds: [sofia.id, leo.id, nora.id], areaId: area.art.id, recordedBy: omar.name, at: y(11) });
+  await moveChildren(prisma, { childIds: [mia.id, emma.id], areaId: area.nap.id, recordedBy: ines.name, at: y(12, 30) });
+  await moveChildren(prisma, { childIds: [sofia.id, leo.id, nora.id], areaId: (await homeArea(prisma, rooms.preschool.id)).id, recordedBy: omar.name, at: y(12) });
+  for (const [child, , picker, , outAt] of yesterday) {
+    await checkOutChild(prisma, { childId: child.id, pickedUpBy: picker, recordedBy: "Front desk", at: outAt });
+  }
+
+  // Today: most children in; the preschool group is outside with Omar.
+  await checkInChild(prisma, { childId: sofia.id, droppedOffBy: "Maria Garcia", recordedBy: "Front desk", at: ago(170) });
+  await checkInChild(prisma, { childId: mateo.id, droppedOffBy: "Luis Garcia", recordedBy: "Front desk", at: ago(165) });
+  await checkInChild(prisma, { childId: leo.id, droppedOffBy: "Daniel Park", recordedBy: "Front desk", at: ago(140) });
+  await checkInChild(prisma, { childId: mia.id, droppedOffBy: "Keisha Johnson", recordedBy: "Front desk", at: ago(150) });
+  await checkInChild(prisma, { childId: nora.id, droppedOffBy: "Sean O'Brien", recordedBy: "Front desk", at: ago(120) });
+  await moveChildren(prisma, { childIds: [sofia.id, leo.id, nora.id], areaId: area.playground.id, recordedBy: omar.name, at: ago(45) });
+  await moveChildren(prisma, { childIds: [mia.id], areaId: area.nap.id, recordedBy: ines.name, at: ago(30) });
 
   await prisma.message.create({
     data: { familyId: garcia.fam.id, authorId: teacher.id, body: "Mateo had a great day — painted with watercolors and napped 1.5 hrs!" },

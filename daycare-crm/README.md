@@ -35,7 +35,16 @@ Most childcare platforms treat accounting as a payments list plus an export. Nes
 
 - **Leads & tours:** kanban pipeline, activity log, tour scheduling, conversion rate, one-click convert to family + guardian + billing account + child.
 - **Families:** guardians and authorized pickups, children (allergies, immunization due dates), enrollments, split billing, statements, messages.
-- **Attendance:** classroom check-in/out with pickup person, staff clock-in, and **live ratio compliance** per room.
+- **Drop-off, pick-up & whereabouts:**
+  - **Check-in** records the time, who dropped the child off (a guardian, or "someone else" by name) and which staff member recorded it.
+  - **Check-out** is limited to adults on the authorized-pickup list. Anyone else is refused with the list shown.
+  - **Areas** cover every space a child can be in: each classroom's home room plus shared spaces like the playground, gym or nap room (managed under *Rooms & Ratios*).
+  - **Location and caregiver at all times:** while a child is in the building they always have exactly one current **area** and **responsible caregiver**. Staff move one child or a selected group ("preschool → Playground with Omar"), and every move is time-stamped.
+  - **Caregivers** must be clocked in to take children, and can't clock out while children are still assigned to them.
+  - **Where is everyone:** a live board showing each area, who is with whom and since when. Caregiver load is checked against the strictest ratio in each group, so one infant in a mixed group applies the infant ratio.
+  - **Daily log:** each visit's drop-off and pick-up (time, person, recorded by) plus the full area/caregiver timeline, with CSV download for licensing records.
+  - **Multiple visits per day** are supported (e.g. out for an appointment and back).
+  - **Families and parents** see the same information: today's status and history on the family page, and the live location plus today's timeline in the parent portal.
 - **Dashboard:** occupancy, MTD revenue/collections, A/R aging, books health, ratio status, pipeline, compliance alerts.
 - **Parent portal:** today's check-in status, billing history, pay balance, autopay, messages.
 - **Roles:** Admin, Director, Bookkeeper, Teacher, Parent. Enforced in `src/proxy.ts` *and* in every page and server action.
@@ -78,6 +87,7 @@ npm run build
   - `posting.ts`: the only writer to the GL (period lock, numbering, reversals)
   - `receivables.ts`: invoices, payments, credits, write-offs, refunds, deposits, late fees
   - `billing-run.ts`, `reports.ts`, `statement.ts`
+- `src/lib/attendance.ts`: check-in/out, movements between areas and caregivers, pickup authorization, caregiver load, daily log
 - `src/lib/integrations/`: OAuth (`oauth.ts`), token crypto, QuickBooks/Xero HTTP clients (`clients.ts`), payload mappers and file exports (`mappers.ts`), sync engine (`sync.ts`)
 - `src/app/`: pages and server actions by area (`leads`, `families`, `attendance`, `billing`, `accounting`, `integrations`, `portal`)
 
