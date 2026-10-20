@@ -1,0 +1,641 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// All money is stored as integer cents. Percentages are stored as basis
+// points (1% = 100 bps) so nothing is ever rounded through a float.
+
+// ---------------------------------------------------------------------------
+// Center settings & people
+// ---------------------------------------------------------------------------
+
+model Center {
+  id                String    @id @default("center")
+  name              String
+  legalName         String?
+  ein               String?
+  address           String?
+  phone             String?
+  email             String?
+  // Postings dated on/before this date are rejected (closed period).
+  lockDate          DateTime?
+  invoiceDueDays    Int       @default(7)
+  lateFeeCents      Int       @default(0)
+  lateFeeGraceDays  Int       @default(5)
+  cardFeeBps        Int       @default(290)
+  cardFeeFixedCents Int       @default(30)
+  achFeeBps         Int       @default(80)
+  achFeeCapCents    Int       @default(500)
+  // Applied to the 2nd+ enrolled child in a family, on tuition lines only.
+  siblingDiscountBps Int      @default(0)
+  nextInvoiceNumber Int       @default(1001)
+  nextJournalNumber Int       @default(1)
+}
+
+enum Role {
+  ADMIN
+  DIRECTOR
+  BOOKKEEPER
+  TEACHER
+  PARENT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  // Teachers: home classroom. Parents: linked guardian record.
+  classroomId  String?
+  classroom    Classroom? @relation(fields: [classroomId], references: [id])
+  guardianId   String?  @unique
+  guardian     Guardian? @relation(fields: [guardianId], references: [id])
+  createdAt    DateTime @default(now())
+
+  journalEntries JournalEntry[]
+  auditLogs      AuditLog[]
+  leadActivities LeadActivity[]
+  staffShifts    StaffShift[]
+  messages       Message[]
+}
+
+model Classroom {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  ageGroup  String
+  capacity  Int
+  // Max children per staff member (state licensing ratio).
+  ratio     Int
+  createdAt DateTime @default(now())
+
+  children     Child[]
+  teachers     User[]
+  attendance   Attendance[]
+  staffShifts  StaffShift[]
+  feePlans     FeePlan[]
+  leads        Lead[]
+  journalLines JournalLine[]
+}
+
+enum FamilyStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Family {
+  id        String       @id @default(cuid())
+  name      String
+  status    FamilyStatus @default(ACTIVE)
+  notes     String?
+  createdAt DateTime     @default(now())
+
+  guardians Guardian[]
+  children  Child[]
+  payers    Payer[]
+  messages  Message[]
+  leads     Lead[]
+}
+
+model Guardian {
+  id           String  @id @default(cuid())
+  familyId     String
+  family       Family  @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  firstName    String
+  lastName     String
+  email        String?
+  phone        String?
+  relationship String?
+  isPrimary    Boolean @default(false)
+  canPickup    Boolean @default(true)
+
+  user  User?
+  payer Payer?
+}
+
+enum ChildStatus {
+  ENROLLED
+  WAITLIST
+  WITHDRAWN
+}
+
+model Child {
+  id               String      @id @default(cuid())
+  familyId         String
+  family           Family      @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  firstName        String
+  lastName         String
+  dateOfBirth      DateTime
+  classroomId      String?
+  classroom        Classroom?  @relation(fields: [classroomId], references: [id])
+  status           ChildStatus @default(ENROLLED)
+  allergies        String?
+  medicalNotes     String?
+  immunizationsDue DateTime?
+  createdAt        DateTime    @default(now())
+
+  enrollments  Enrollment[]
+  attendance   Attendance[]
+  invoiceLines InvoiceLine[]
+}
+
+model Attendance {
+  id           String    @id @default(cuid())
+  childId      String
+  child        Child     @relation(fields: [childId], references: [id], onDelete: Cascade)
+  classroomId  String
+  classroom    Classroom @relation(fields: [classroomId], references: [id])
+  // Local calendar day the attendance belongs to (midnight UTC of that day).
+  day          DateTime
+  checkInAt    DateTime
+  checkOutAt   DateTime?
+  checkInBy    String?
+  checkOutBy   String?
+  pickedUpBy   String?
+
+  @@unique([childId, day])
+  @@index([classroomId, day])
+}
+
+model StaffShift {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  classroomId String
+  classroom   Classroom @relation(fields: [classroomId], references: [id])
+  clockInAt   DateTime
+  clockOutAt  DateTime?
+
+  @@index([classroomId, clockOutAt])
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  familyId  String
+  family    Family   @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  body      String
+  createdAt DateTime @default(now())
+
+  @@index([familyId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// CRM: enrollment pipeline
+// ---------------------------------------------------------------------------
+
+enum LeadStage {
+  INQUIRY
+  TOUR_SCHEDULED
+  TOURED
+  APPLIED
+  WAITLIST
+  ENROLLED
+  LOST
+}
+
+model Lead {
+  id           String     @id @default(cuid())
+  parentName   String
+  email        String?
+  phone        String?
+  childName    String
+  childDob     DateTime?
+  desiredStart DateTime?
+  classroomId  String?
+  classroom    Classroom? @relation(fields: [classroomId], references: [id])
+  source       String?
+  stage        LeadStage  @default(INQUIRY)
+  tourAt       DateTime?
+  lostReason   String?
+  notes        String?
+  familyId     String?
+  family       Family?    @relation(fields: [familyId], references: [id])
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  activities LeadActivity[]
+
+  @@index([stage])
+}
+
+model LeadActivity {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  kind      String
+  body      String
+  createdAt DateTime @default(now())
+
+  @@index([leadId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Accounting: chart of accounts & double-entry general ledger
+// ---------------------------------------------------------------------------
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+model Account {
+  id        String      @id @default(cuid())
+  code      String      @unique
+  name      String
+  type      AccountType
+  // Stable key for accounts the posting engine depends on (AR, UNDEPOSITED_FUNDS, ...).
+  systemKey String?     @unique
+  active    Boolean     @default(true)
+  createdAt DateTime    @default(now())
+
+  journalLines  JournalLine[]
+  feePlans      FeePlan[]
+  invoiceLines  InvoiceLine[]
+  adjustments   Adjustment[]
+  deposits      Deposit[]
+}
+
+enum JournalSource {
+  INVOICE
+  PAYMENT
+  ADJUSTMENT
+  REFUND
+  DEPOSIT
+  MANUAL
+  REVERSAL
+}
+
+// Posted entries are immutable. Corrections are made with reversing entries
+// so the audit trail (and anything already synced to QuickBooks/Xero) holds.
+model JournalEntry {
+  id          String        @id @default(cuid())
+  number      Int           @unique
+  date        DateTime
+  memo        String
+  source      JournalSource
+  sourceId    String?
+  reversesId  String?       @unique
+  reverses    JournalEntry? @relation("Reversal", fields: [reversesId], references: [id])
+  reversedBy  JournalEntry? @relation("Reversal")
+  createdById String?
+  createdBy   User?         @relation(fields: [createdById], references: [id])
+  createdAt   DateTime      @default(now())
+
+  lines JournalLine[]
+
+  @@index([date])
+  @@index([source, sourceId])
+}
+
+model JournalLine {
+  id          String       @id @default(cuid())
+  entryId     String
+  entry       JournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  accountId   String
+  account     Account      @relation(fields: [accountId], references: [id])
+  debitCents  Int          @default(0)
+  creditCents Int          @default(0)
+  // Sub-ledger (customer) for A/R and customer-credit lines.
+  payerId     String?
+  payer       Payer?       @relation(fields: [payerId], references: [id])
+  // Class tracking → QuickBooks Class / Xero tracking category.
+  classroomId String?
+  classroom   Classroom?   @relation(fields: [classroomId], references: [id])
+  memo        String?
+
+  @@index([accountId])
+  @@index([payerId])
+}
+
+// ---------------------------------------------------------------------------
+// Billing: payers, plans, enrollments, invoices, payments
+// ---------------------------------------------------------------------------
+
+enum PayerKind {
+  GUARDIAN
+  AGENCY
+  EMPLOYER
+}
+
+// A payer is an A/R customer. Guardians in split households each get their
+// own payer; subsidy agencies and employers are payers that span families.
+model Payer {
+  id         String    @id @default(cuid())
+  name       String
+  kind       PayerKind
+  email      String?
+  familyId   String?
+  family     Family?   @relation(fields: [familyId], references: [id])
+  guardianId String?   @unique
+  guardian   Guardian? @relation(fields: [guardianId], references: [id])
+  autopay    Boolean   @default(false)
+  // Display-only label for the stored payment method, e.g. "Visa •••• 4242".
+  paymentMethodLabel String?
+  createdAt  DateTime  @default(now())
+
+  splits       BillingSplit[]
+  invoices     Invoice[]
+  payments     Payment[]
+  adjustments  Adjustment[]
+  journalLines JournalLine[]
+}
+
+enum BillingFrequency {
+  WEEKLY
+  MONTHLY
+}
+
+model FeePlan {
+  id               String           @id @default(cuid())
+  name             String
+  amountCents      Int
+  frequency        BillingFrequency
+  revenueAccountId String
+  revenueAccount   Account          @relation(fields: [revenueAccountId], references: [id])
+  classroomId      String?
+  classroom        Classroom?       @relation(fields: [classroomId], references: [id])
+  active           Boolean          @default(true)
+  createdAt        DateTime         @default(now())
+
+  enrollments Enrollment[]
+}
+
+model Enrollment {
+  id             String    @id @default(cuid())
+  childId        String
+  child          Child     @relation(fields: [childId], references: [id], onDelete: Cascade)
+  feePlanId      String
+  feePlan        FeePlan   @relation(fields: [feePlanId], references: [id])
+  startDate      DateTime
+  endDate        DateTime?
+  // Extra per-enrollment discount (staff discount, scholarship...), in bps.
+  discountBps    Int       @default(0)
+  discountReason String?
+  createdAt      DateTime  @default(now())
+
+  splits BillingSplit[]
+  lines  InvoiceLine[]
+}
+
+enum SplitKind {
+  PERCENT
+  FIXED
+}
+
+// How an enrollment's charge is divided between payers. FIXED splits are
+// taken first (e.g. a subsidy agency covering $600/mo); PERCENT splits share
+// what remains. No splits → the family's primary payer is billed 100%.
+model BillingSplit {
+  id           String     @id @default(cuid())
+  enrollmentId String
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  payerId      String
+  payer        Payer      @relation(fields: [payerId], references: [id])
+  kind         SplitKind
+  // bps for PERCENT, cents for FIXED.
+  value        Int
+
+  @@unique([enrollmentId, payerId])
+}
+
+model BillingRun {
+  id           String   @id @default(cuid())
+  periodStart  DateTime
+  periodEnd    DateTime
+  invoiceCount Int
+  totalCents   Int
+  createdById  String?
+  createdAt    DateTime @default(now())
+
+  invoices Invoice[]
+}
+
+enum InvoiceStatus {
+  OPEN
+  PAID
+  VOID
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  number         Int           @unique
+  payerId        String
+  payer          Payer         @relation(fields: [payerId], references: [id])
+  issueDate      DateTime
+  dueDate        DateTime
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  status         InvoiceStatus @default(OPEN)
+  totalCents     Int
+  memo           String?
+  billingRunId   String?
+  billingRun     BillingRun?   @relation(fields: [billingRunId], references: [id])
+  journalEntryId String?       @unique
+  lateFeeForId   String?
+  createdAt      DateTime      @default(now())
+
+  lines       InvoiceLine[]
+  allocations Allocation[]
+
+  @@index([payerId, status])
+}
+
+model InvoiceLine {
+  id           String      @id @default(cuid())
+  invoiceId    String
+  invoice      Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description  String
+  accountId    String
+  account      Account     @relation(fields: [accountId], references: [id])
+  amountCents  Int
+  childId      String?
+  child        Child?      @relation(fields: [childId], references: [id])
+  enrollmentId String?
+  enrollment   Enrollment? @relation(fields: [enrollmentId], references: [id])
+  classroomId  String?
+  // Guarantees a billing run can be re-run safely: one charge per
+  // enrollment/payer/period/kind.
+  dedupeKey    String?     @unique
+}
+
+enum PaymentMethod {
+  CARD
+  ACH
+  CASH
+  CHECK
+  SUBSIDY
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  payerId        String
+  payer          Payer         @relation(fields: [payerId], references: [id])
+  receivedAt     DateTime
+  method         PaymentMethod
+  amountCents    Int
+  // Processor fee withheld from the payout (expensed at receipt).
+  feeCents       Int           @default(0)
+  reference      String?
+  memo           String?
+  depositId      String?
+  deposit        Deposit?      @relation(fields: [depositId], references: [id])
+  journalEntryId String?       @unique
+  createdAt      DateTime      @default(now())
+
+  allocations Allocation[]
+  refunds     Refund[]
+
+  @@index([payerId])
+  @@index([depositId])
+}
+
+enum AdjustmentKind {
+  CREDIT
+  WRITE_OFF
+}
+
+model Adjustment {
+  id             String         @id @default(cuid())
+  payerId        String
+  payer          Payer          @relation(fields: [payerId], references: [id])
+  kind           AdjustmentKind
+  date           DateTime
+  amountCents    Int
+  reason         String
+  // Debit side: revenue/discount account for credits, bad debt for write-offs.
+  accountId      String
+  account        Account        @relation(fields: [accountId], references: [id])
+  journalEntryId String?        @unique
+  createdAt      DateTime       @default(now())
+
+  allocations Allocation[]
+}
+
+// Matches a payment or adjustment against an invoice. Anything not allocated
+// is a customer credit that is applied automatically to the next invoice.
+model Allocation {
+  id           String      @id @default(cuid())
+  invoiceId    String
+  invoice      Invoice     @relation(fields: [invoiceId], references: [id])
+  paymentId    String?
+  payment      Payment?    @relation(fields: [paymentId], references: [id])
+  adjustmentId String?
+  adjustment   Adjustment? @relation(fields: [adjustmentId], references: [id])
+  amountCents  Int
+  createdAt    DateTime    @default(now())
+
+  @@index([invoiceId])
+  @@index([paymentId])
+  @@index([adjustmentId])
+}
+
+model Refund {
+  id             String   @id @default(cuid())
+  paymentId      String
+  payment        Payment  @relation(fields: [paymentId], references: [id])
+  date           DateTime
+  amountCents    Int
+  reason         String
+  journalEntryId String?  @unique
+  createdAt      DateTime @default(now())
+}
+
+// A bank deposit / processor payout. Moves money from Undeposited Funds to the
+// bank account so it reconciles 1:1 with the bank statement.
+model Deposit {
+  id             String   @id @default(cuid())
+  date           DateTime
+  bankAccountId  String
+  bankAccount    Account  @relation(fields: [bankAccountId], references: [id])
+  amountCents    Int
+  reference      String?
+  journalEntryId String?  @unique
+  createdAt      DateTime @default(now())
+
+  payments Payment[]
+}
+
+// ---------------------------------------------------------------------------
+// QuickBooks Online / Xero integration
+// ---------------------------------------------------------------------------
+
+enum Provider {
+  QUICKBOOKS
+  XERO
+}
+
+enum SyncMode {
+  // One balanced journal per day, summarised by account and class.
+  SUMMARY
+  // Customers, invoices, payments and credit notes as native objects.
+  DETAILED
+}
+
+model Integration {
+  id              String    @id @default(cuid())
+  provider        Provider  @unique
+  // QuickBooks realmId or Xero tenantId.
+  tenantId        String?
+  companyName     String?
+  accessTokenEnc  String?
+  refreshTokenEnc String?
+  expiresAt       DateTime?
+  syncMode        SyncMode  @default(SUMMARY)
+  // Nothing dated before this is pushed (avoids duplicating history that is
+  // already in the books).
+  syncFrom        DateTime?
+  connectedAt     DateTime?
+  lastSyncAt      DateTime?
+  lastError       String?
+}
+
+// Links a local record (account, payer, classroom, invoice, journal day...) to
+// its remote id. Doubles as the idempotency record for the sync engine.
+model ExternalRef {
+  id         String   @id @default(cuid())
+  provider   Provider
+  entityType String
+  localId    String
+  remoteId   String
+  remoteName String?
+  syncedAt   DateTime @default(now())
+
+  @@unique([provider, entityType, localId])
+}
+
+model SyncLog {
+  id         String   @id @default(cuid())
+  provider   Provider
+  entityType String
+  localId    String?
+  status     String
+  message    String
+  createdAt  DateTime @default(now())
+
+  @@index([provider, createdAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
