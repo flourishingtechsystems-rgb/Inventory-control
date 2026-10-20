@@ -8,6 +8,7 @@ import { FINANCE, STAFF } from "@/lib/roles";
 import { optStr, str, toActionError, type ActionState } from "@/lib/actions";
 import { parseDay } from "@/lib/dates";
 import { parseMoneyToCents } from "@/lib/money";
+import { generatePin, pinDigest } from "@/lib/presence";
 
 export async function createFamily(_: ActionState, formData: FormData): Promise<ActionState> {
   let familyId: string;
@@ -189,6 +190,41 @@ export async function postMessage(familyId: string, _: ActionState, formData: Fo
     revalidatePath(`/families/${familyId}`);
     revalidatePath("/portal");
     return { ok: "Sent." };
+  } catch (e) {
+    return toActionError(e);
+  }
+}
+
+/** Issues a new random kiosk PIN. It's shown once; only a keyed digest is stored. */
+export async function issuePinAction(familyId: string, guardianId: string): Promise<ActionState> {
+  try {
+    const user = await requireRole(STAFF);
+    const guardian = await prisma.guardian.findUniqueOrThrow({ where: { id: guardianId } });
+    if (guardian.familyId !== familyId) return { error: "Not authorized" };
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const pin = generatePin();
+      const digest = pinDigest(pin);
+      if (await prisma.guardian.findUnique({ where: { pinDigest: digest } })) continue;
+      await prisma.guardian.update({ where: { id: guardianId }, data: { pinDigest: digest, pinSetAt: new Date() } });
+      await prisma.auditLog.create({
+        data: { userId: user.id, action: "kiosk.pin_set", entity: "Guardian", entityId: guardianId, detail: `by staff for ${guardian.firstName} ${guardian.lastName}` },
+      });
+      revalidatePath(`/families/${familyId}`);
+      return { ok: `New PIN for ${guardian.firstName}: ${pin} — share it now, it won't be shown again.` };
+    }
+    return { error: "Couldn't generate a unique PIN — try again." };
+  } catch (e) {
+    return toActionError(e);
+  }
+}
+
+export async function clearPinAction(familyId: string, guardianId: string): Promise<ActionState> {
+  try {
+    const user = await requireRole(STAFF);
+    await prisma.guardian.update({ where: { id: guardianId, familyId }, data: { pinDigest: null, pinSetAt: null } });
+    await prisma.auditLog.create({ data: { userId: user.id, action: "kiosk.pin_cleared", entity: "Guardian", entityId: guardianId } });
+    revalidatePath(`/families/${familyId}`);
+    return { ok: "PIN removed." };
   } catch (e) {
     return toActionError(e);
   }

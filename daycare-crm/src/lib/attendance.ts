@@ -161,16 +161,30 @@ export async function authorizedPickups(tx: Tx, childId: string) {
 
 export async function checkOutChild(
   tx: Tx,
-  input: { childId: string; pickedUpBy: string; recordedBy?: string | null; at?: Date },
+  input: {
+    childId: string;
+    pickedUpBy: string;
+    recordedBy?: string | null;
+    at?: Date;
+    // An approved PickupRelease lets someone off the list collect the child.
+    releaseId?: string;
+  },
 ) {
   const at = input.at ?? new Date();
   const session = await openSession(tx, input.childId);
   if (!session) throw new AttendanceError("This child isn't checked in.");
-  const allowed = await authorizedPickups(tx, input.childId);
-  if (!allowed.includes(input.pickedUpBy.trim())) {
-    throw new AttendanceError(
-      `${input.pickedUpBy || "That person"} is not on the authorized pickup list. Authorized: ${allowed.join(", ") || "nobody — add one on the family page"}.`,
-    );
+  if (input.releaseId) {
+    const release = await tx.pickupRelease.findUnique({ where: { id: input.releaseId } });
+    if (!release || release.attendanceId !== session.id || release.status !== "APPROVED") {
+      throw new AttendanceError("That release hasn't been approved for this visit.");
+    }
+  } else {
+    const allowed = await authorizedPickups(tx, input.childId);
+    if (!allowed.includes(input.pickedUpBy.trim())) {
+      throw new AttendanceError(
+        `${input.pickedUpBy || "That person"} is not on the authorized pickup list. Authorized: ${allowed.join(", ") || "nobody — add one on the family page"}. Use “Release to someone else” for a one-time exception.`,
+      );
+    }
   }
   await tx.childMovement.updateMany({ where: { attendanceId: session.id, endedAt: null }, data: { endedAt: at } });
   return tx.attendance.update({
@@ -247,7 +261,195 @@ export async function dayLog(tx: Tx, day: Date, filter: { classroomId?: string; 
       child: true,
       classroom: true,
       movements: { include: { area: true, caregiver: true }, orderBy: { startedAt: "asc" } },
+      releases: { include: { decidedBy: true } },
     },
     orderBy: [{ checkInAt: "asc" }],
   });
+}
+
+// --- Self check-in (kiosk PIN or parent phone) --------------------------------
+
+/** The guardian's family's enrolled children with their status today. */
+export async function guardianChildren(tx: Tx, guardianId: string) {
+  const guardian = await tx.guardian.findUniqueOrThrow({
+    where: { id: guardianId },
+    include: {
+      family: {
+        include: {
+          children: {
+            where: { status: "ENROLLED", classroomId: { not: null } },
+            include: { classroom: true, attendance: { where: { checkOutAt: null }, take: 1 } },
+            orderBy: { firstName: "asc" },
+          },
+        },
+      },
+    },
+  });
+  return {
+    guardian,
+    children: guardian.family.children.map((c) => ({
+      id: c.id,
+      name: fullName(c),
+      firstName: c.firstName,
+      classroomName: c.classroom?.name ?? "",
+      checkedIn: c.attendance.length > 0,
+      checkedInAt: c.attendance[0]?.checkInAt ?? null,
+    })),
+  };
+}
+
+export async function selfCheckIn(tx: Tx, input: { guardianId: string; childId: string; via: string; at?: Date }) {
+  const { guardian, children } = await guardianChildren(tx, input.guardianId);
+  if (!children.some((c) => c.id === input.childId)) throw new AttendanceError("That child isn't in your family.");
+  return checkInChild(tx, {
+    childId: input.childId,
+    droppedOffBy: fullName(guardian),
+    recordedBy: `Self check-in (${input.via})`,
+    at: input.at,
+  });
+}
+
+export async function selfCheckOut(tx: Tx, input: { guardianId: string; childId: string; via: string; at?: Date }) {
+  const { guardian, children } = await guardianChildren(tx, input.guardianId);
+  if (!children.some((c) => c.id === input.childId)) throw new AttendanceError("That child isn't in your family.");
+  if (!guardian.canPickup) {
+    throw new AttendanceError("You're not on the authorized pickup list — please see the front desk.");
+  }
+  return checkOutChild(tx, {
+    childId: input.childId,
+    pickedUpBy: fullName(guardian),
+    recordedBy: `Self check-out (${input.via})`,
+    at: input.at,
+  });
+}
+
+/** Too many wrong PINs / center codes from one login in 10 minutes locks it briefly. */
+export async function isLockedOut(tx: Tx, userId: string, action: string, now: Date = new Date()) {
+  const recent = await tx.auditLog.count({
+    where: { userId, action, createdAt: { gte: new Date(now.getTime() - 10 * 60_000) } },
+  });
+  return recent >= 5;
+}
+
+// --- One-time release to someone not on the pickup list -----------------------
+
+const APPROVER_ROLES = ["ADMIN", "DIRECTOR"];
+
+export type Actor = { id: string; name: string; role: string };
+
+export async function requestRelease(
+  tx: Tx,
+  input: {
+    childId: string;
+    personName: string;
+    relationship: string;
+    idType: string;
+    idNumber: string;
+    consentFrom: string;
+    consentMethod: string;
+    notes?: string | null;
+    actor: Actor;
+  },
+) {
+  const session = await openSession(tx, input.childId);
+  if (!session) throw new AttendanceError("This child isn't checked in.");
+  const personName = input.personName.trim();
+  const idClean = input.idNumber.replace(/[^a-zA-Z0-9]/g, "");
+  if (!personName || !input.relationship.trim() || !input.idType.trim()) {
+    throw new AttendanceError("Name, relationship and ID type are required.");
+  }
+  if (idClean.length < 4) throw new AttendanceError("Enter the ID number (at least the last 4 characters) after checking the ID.");
+  if ((await authorizedPickups(tx, input.childId)).includes(personName)) {
+    throw new AttendanceError(`${personName} is already authorized — use the normal check-out.`);
+  }
+  const child = await tx.child.findUniqueOrThrow({
+    where: { id: input.childId },
+    include: { family: { include: { guardians: true } } },
+  });
+  const consenting = child.family.guardians.find((g) => fullName(g) === input.consentFrom && g.canPickup);
+  if (!consenting) throw new AttendanceError("Consent must come from an authorized guardian on file.");
+  if (await tx.pickupRelease.findFirst({ where: { attendanceId: session.id, status: "PENDING" } })) {
+    throw new AttendanceError("A release for this child is already waiting for approval.");
+  }
+
+  const release = await tx.pickupRelease.create({
+    data: {
+      attendanceId: session.id,
+      childId: input.childId,
+      personName,
+      relationship: input.relationship.trim(),
+      idType: input.idType.trim(),
+      idLast4: idClean.slice(-4).toUpperCase(),
+      consentFrom: input.consentFrom,
+      consentMethod: input.consentMethod,
+      notes: input.notes?.trim() || null,
+      requestedById: input.actor.id,
+    },
+  });
+  await tx.auditLog.create({
+    data: {
+      userId: input.actor.id,
+      action: "pickup.release_requested",
+      entity: "PickupRelease",
+      entityId: release.id,
+      detail: `${fullName(child)} → ${personName} (${input.relationship}); consent ${input.consentFrom} via ${input.consentMethod}`,
+    },
+  });
+  // A director at the desk approves their own request in one step.
+  if (APPROVER_ROLES.includes(input.actor.role)) {
+    return decideRelease(tx, { releaseId: release.id, approve: true, actor: input.actor });
+  }
+  return release;
+}
+
+export async function decideRelease(
+  tx: Tx,
+  input: { releaseId: string; approve: boolean; note?: string | null; actor: Actor; at?: Date },
+) {
+  if (!APPROVER_ROLES.includes(input.actor.role)) {
+    throw new AttendanceError("Only a director or admin can approve a release.");
+  }
+  const at = input.at ?? new Date();
+  const release = await tx.pickupRelease.findUniqueOrThrow({
+    where: { id: input.releaseId },
+    include: { child: true },
+  });
+  if (release.status !== "PENDING") throw new AttendanceError("This release was already decided.");
+  const decided = await tx.pickupRelease.update({
+    where: { id: release.id },
+    data: {
+      status: input.approve ? "APPROVED" : "DENIED",
+      decidedById: input.actor.id,
+      decidedAt: at,
+      decisionNote: input.note?.trim() || null,
+    },
+  });
+  const childName = fullName(release.child);
+  if (input.approve) {
+    await checkOutChild(tx, {
+      childId: release.childId,
+      pickedUpBy: `${release.personName} (one-time release)`,
+      recordedBy: input.actor.name,
+      releaseId: release.id,
+      at,
+    });
+    // Tell the family straight away, in their message thread.
+    await tx.message.create({
+      data: {
+        familyId: release.child.familyId,
+        authorId: input.actor.id,
+        body: `${release.child.firstName} was released at ${at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })} to ${release.personName} (${release.relationship}), who is not on your pickup list. ID checked (${release.idType} ending ${release.idLast4}); consent given by ${release.consentFrom} via ${release.consentMethod.toLowerCase()}. Approved by ${input.actor.name}. Please contact us right away if this wasn't expected.`,
+      },
+    });
+  }
+  await tx.auditLog.create({
+    data: {
+      userId: input.actor.id,
+      action: input.approve ? "pickup.release_approved" : "pickup.release_denied",
+      entity: "PickupRelease",
+      entityId: release.id,
+      detail: `${childName} → ${release.personName}${input.note ? ` — ${input.note}` : ""}`,
+    },
+  });
+  return decided;
 }

@@ -33,6 +33,7 @@ export default async function DashboardPage() {
       prisma.center.findUnique({ where: { id: "center" } }),
     ]);
 
+  const pendingReleases = await prisma.pickupRelease.count({ where: { status: "PENDING" } });
   const capacity = rooms.reduce((a, r) => a + r.capacity, 0);
   const pl = profitAndLoss(mtd);
   const overdue = aging.grandTotal - aging.totals.Current;
@@ -43,6 +44,11 @@ export default async function DashboardPage() {
     <Page wide>
       <PageHeader title={center?.name ?? "Dashboard"} subtitle={`${formatDay(now)} · month to date`} />
 
+      {pendingReleases > 0 && (
+        <Link href="/attendance" className="mb-6 block rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 hover:bg-amber-100">
+          ⚠️ {pendingReleases} pickup {pendingReleases === 1 ? "release needs" : "releases need"} director approval →
+        </Link>
+      )}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat label="Occupancy" value={`${capacity ? Math.round((enrolled / capacity) * 100) : 0}%`} hint={`${enrolled} of ${capacity} seats enrolled`} />
         <Stat label="Revenue (MTD)" value={formatCents(pl.totalRevenue)} hint={`Net income ${formatCents(pl.netIncome)}`} />

@@ -43,6 +43,8 @@ enum Role {
   BOOKKEEPER
   TEACHER
   PARENT
+  // Shared front-desk tablet: can only run the self check-in kiosk.
+  KIOSK
 }
 
 model User {
@@ -64,6 +66,8 @@ model User {
   staffShifts    StaffShift[]
   messages       Message[]
   caregiving     ChildMovement[]
+  releasesRequested PickupRelease[] @relation("ReleaseRequester")
+  releasesDecided   PickupRelease[] @relation("ReleaseDecider")
 }
 
 model Classroom {
@@ -115,6 +119,9 @@ model Guardian {
   relationship String?
   isPrimary    Boolean @default(false)
   canPickup    Boolean @default(true)
+  // Keyed HMAC of the kiosk PIN (unique, so a PIN identifies one adult).
+  pinDigest    String?   @unique
+  pinSetAt     DateTime?
 
   user  User?
   payer Payer?
@@ -145,6 +152,7 @@ model Child {
   attendance   Attendance[]
   invoiceLines InvoiceLine[]
   movements    ChildMovement[]
+  releases     PickupRelease[]
 }
 
 // One drop-off → pick-up session. A child can have several in a day (e.g.
@@ -167,9 +175,45 @@ model Attendance {
   checkOutBy   String?
 
   movements ChildMovement[]
+  releases  PickupRelease[]
 
   @@index([childId, day])
   @@index([classroomId, day])
+}
+
+enum ReleaseStatus {
+  PENDING
+  APPROVED
+  DENIED
+}
+
+// Releasing a child to an adult who is NOT on the authorized pickup list.
+// Requires verified ID, a guardian's consent and a director's approval.
+model PickupRelease {
+  id              String        @id @default(cuid())
+  attendanceId    String
+  attendance      Attendance    @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+  childId         String
+  child           Child         @relation(fields: [childId], references: [id], onDelete: Cascade)
+  personName      String
+  relationship    String
+  idType          String
+  // Only the last 4 characters of the ID number are kept.
+  idLast4         String
+  consentFrom     String
+  consentMethod   String
+  notes           String?
+  status          ReleaseStatus @default(PENDING)
+  requestedById   String
+  requestedBy     User          @relation("ReleaseRequester", fields: [requestedById], references: [id])
+  decidedById     String?
+  decidedBy       User?         @relation("ReleaseDecider", fields: [decidedById], references: [id])
+  decidedAt       DateTime?
+  decisionNote    String?
+  createdAt       DateTime      @default(now())
+
+  @@index([status])
+  @@index([attendanceId])
 }
 
 // A physical space in the center: a classroom, the playground, nap room...

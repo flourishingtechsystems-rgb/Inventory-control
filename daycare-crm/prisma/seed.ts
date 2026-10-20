@@ -7,6 +7,7 @@ import { postBillingRun } from "../src/lib/accounting/billing-run";
 import { createAdjustment, createDeposit, createInvoice, recordPayment } from "../src/lib/accounting/receivables";
 import { addDays, monthPeriod, today } from "../src/lib/dates";
 import { checkInChild, checkOutChild, homeArea, moveChildren } from "../src/lib/attendance";
+import { pinDigest } from "../src/lib/presence";
 import type { Role } from "../src/lib/roles";
 
 const DEMO_PASSWORD = "password123";
@@ -285,6 +286,12 @@ async function main() {
     await prisma.leadActivity.create({
       data: { leadId: lead.id, userId: director.id, kind: "NOTE", body: `Inquiry received via ${l.source}.` },
     });
+  }
+
+  // Front-desk kiosk login and demo PINs (Maria 246810, Luis 135792).
+  await user("Front Desk Kiosk", "kiosk@demo.com", "KIOSK");
+  for (const [first, pin] of [["Maria", "246810"], ["Luis", "135792"]] as const) {
+    await prisma.guardian.updateMany({ where: { firstName: first, lastName: "Garcia" }, data: { pinDigest: pinDigest(pin), pinSetAt: new Date() } });
   }
 
   // Areas: each classroom's home room plus shared spaces.

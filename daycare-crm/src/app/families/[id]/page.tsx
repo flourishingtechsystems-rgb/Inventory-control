@@ -10,7 +10,7 @@ import { payerLedgerBalance } from "@/lib/accounting/receivables";
 import { ActionForm } from "@/components/ActionForm";
 import { AdjustmentForm, ChargeForm, PaymentForm } from "@/components/BillingForms";
 import { Badge, Card, Field, Page, PageHeader, btnSecondary, inputCls, linkCls, tdCls, tdDate, tdRight, thCls, thRight, trCls } from "@/components/ui";
-import { addChild, addGuardian, endEnrollment, enrollChild, postMessage, toggleAutopay } from "../actions";
+import { addChild, addGuardian, clearPinAction, endEnrollment, enrollChild, issuePinAction, postMessage, toggleAutopay } from "../actions";
 
 function age(dob: Date) {
   const months = Math.floor(daysBetween(dob, today()) / 30.44);
@@ -269,6 +269,17 @@ export default async function FamilyPage(props: PageProps<"/families/[id]">) {
                   </div>
                   <div className="text-xs text-zinc-500">{[g.relationship, g.email, g.phone].filter(Boolean).join(" · ")}</div>
                   <div className="text-xs text-zinc-500">{g.canPickup ? "Authorized for pickup" : "Not authorized for pickup"}</div>
+                  <div className="mt-1 text-xs text-zinc-500">
+                    Kiosk PIN: {g.pinSetAt ? `set ${formatDay(g.pinSetAt)}` : "not set"}
+                  </div>
+                  {isStaff && (
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      <ActionForm action={issuePinAction.bind(null, family.id, g.id)} submitLabel={g.pinSetAt ? "Reset PIN" : "Issue PIN"} buttonClassName="text-xs font-medium text-teal-700 hover:underline" className="flex flex-col gap-1" />
+                      {g.pinSetAt && (
+                        <ActionForm action={clearPinAction.bind(null, family.id, g.id)} submitLabel="Remove PIN" buttonClassName="text-xs text-zinc-500 hover:underline" className="flex flex-col gap-1" confirm="Remove this kiosk PIN?" />
+                      )}
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

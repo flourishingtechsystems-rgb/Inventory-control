@@ -3,9 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
-import { CLASSROOM, STAFF } from "@/lib/roles";
+import { APPROVERS, CLASSROOM, STAFF } from "@/lib/roles";
 import { optStr, str, toActionError, type ActionState } from "@/lib/actions";
-import { checkInChild, checkOutChild, moveChildren } from "@/lib/attendance";
+import { checkInChild, checkOutChild, decideRelease, moveChildren, requestRelease } from "@/lib/attendance";
 
 function refresh() {
   for (const p of ["/attendance", "/attendance/live", "/attendance/log", "/classrooms", "/dashboard", "/portal"]) revalidatePath(p);
@@ -128,4 +128,40 @@ export async function toggleArea(areaId: string) {
   if (area.classroomId) return;
   await prisma.area.update({ where: { id: areaId }, data: { active: !area.active } });
   refresh();
+}
+
+export async function requestReleaseAction(childId: string, _: ActionState, formData: FormData): Promise<ActionState> {
+  try {
+    const user = await requireRole(CLASSROOM);
+    const release = await prisma.$transaction((tx) =>
+      requestRelease(tx, {
+        childId,
+        personName: str(formData, "personName"),
+        relationship: str(formData, "relationship"),
+        idType: str(formData, "idType"),
+        idNumber: str(formData, "idNumber"),
+        consentFrom: str(formData, "consentFrom"),
+        consentMethod: str(formData, "consentMethod"),
+        notes: optStr(formData, "notes"),
+        actor: user,
+      }),
+    );
+    refresh();
+    return release.status === "APPROVED"
+      ? { ok: "Approved and released. The family has been notified." }
+      : { ok: "Sent to a director for approval — keep the child with staff until it's approved." };
+  } catch (e) {
+    return toActionError(e);
+  }
+}
+
+export async function decideReleaseAction(releaseId: string, approve: boolean, _: ActionState, formData: FormData): Promise<ActionState> {
+  try {
+    const user = await requireRole(APPROVERS);
+    await prisma.$transaction((tx) => decideRelease(tx, { releaseId, approve, note: optStr(formData, "note"), actor: user }));
+    refresh();
+    return { ok: approve ? "Approved — child released and family notified." : "Denied. The child stays in care." };
+  } catch (e) {
+    return toActionError(e);
+  }
 }

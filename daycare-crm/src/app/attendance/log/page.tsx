@@ -75,6 +75,12 @@ export default async function LogPage(props: PageProps<"/attendance/log">) {
                       <>
                         {formatTime(s.checkOutAt)}
                         <div className="text-xs text-zinc-500">{s.pickedUpBy ?? "—"}</div>
+                        {s.releases.filter((r) => r.status === "APPROVED").map((r) => (
+                          <div key={r.id} className="mt-1">
+                            <Badge tone="amber">one-time release</Badge>
+                            <div className="text-xs text-zinc-500">{r.idType} …{r.idLast4} · consent {r.consentFrom} · approved by {r.decidedBy?.name}</div>
+                          </div>
+                        ))}
                         {s.checkOutBy && <div className="text-xs text-zinc-400">recorded by {s.checkOutBy}</div>}
                       </>
                     ) : (

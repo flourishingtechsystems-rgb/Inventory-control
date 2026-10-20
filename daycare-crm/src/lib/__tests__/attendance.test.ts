@@ -12,7 +12,12 @@ import {
   checkInChild,
   checkOutChild,
   dayLog,
+  decideRelease,
   homeArea,
+  isLockedOut,
+  requestRelease,
+  selfCheckIn,
+  selfCheckOut,
   moveChildren,
   whereIsEveryone,
 } from "@/lib/attendance";
@@ -49,8 +54,11 @@ before(async () => {
   await db.staffShift.create({ data: { userId: tess.id, classroomId: preschool.id, clockInAt: t(7) } });
 
   const family = await db.family.create({ data: { name: "Lee" } });
-  await db.guardian.create({ data: { familyId: family.id, firstName: "Ana", lastName: "Lee", canPickup: true } });
-  await db.guardian.create({ data: { familyId: family.id, firstName: "Uncle", lastName: "Bob", canPickup: false } });
+  ids.ana = (await db.guardian.create({ data: { familyId: family.id, firstName: "Ana", lastName: "Lee", canPickup: true } })).id;
+  ids.bob = (await db.guardian.create({ data: { familyId: family.id, firstName: "Uncle", lastName: "Bob", canPickup: false } })).id;
+  ids.director = (await db.user.create({ data: { name: "Dana", email: "d@x", passwordHash: "x", role: "DIRECTOR" } })).id;
+  const other = await db.family.create({ data: { name: "Other" } });
+  ids.otherGuardian = (await db.guardian.create({ data: { familyId: other.id, firstName: "Zed", lastName: "Other" } })).id;
   for (const [key, room] of [["kid1", preschool.id], ["kid2", preschool.id], ["baby", infants.id]] as const) {
     ids[key] = (await db.child.create({ data: { familyId: family.id, firstName: key, lastName: "Lee", dateOfBirth: new Date(2023, 0, 1), classroomId: room } })).id;
   }
@@ -125,4 +133,54 @@ test("homeArea is created once per classroom", async () => {
   const a = await homeArea(db, ids.infants);
   const b = await homeArea(db, ids.infants);
   assert.equal(a.id, b.id);
+});
+
+test("self check-in/out is limited to the guardian's own children and pickup rights", async () => {
+  await assert.rejects(selfCheckIn(db, { guardianId: ids.otherGuardian, childId: ids.kid2, via: "kiosk" }), /isn't in your family/);
+  await assert.rejects(selfCheckOut(db, { guardianId: ids.bob, childId: ids.kid1, via: "kiosk" }), /not on the authorized pickup list/);
+  await selfCheckOut(db, { guardianId: ids.ana, childId: ids.kid1, via: "kiosk", at: t(17, 30) });
+  await selfCheckIn(db, { guardianId: ids.bob, childId: ids.kid1, via: "phone", at: t(17, 40) });
+  const [latest] = (await dayLog(db, dayOf(t(12)), { childId: ids.kid1 })).slice(-1);
+  assert.equal(latest.droppedOffBy, "Uncle Bob");
+  assert.equal(latest.checkInBy, "Self check-in (phone)");
+});
+
+test("release to someone off the list needs guardian consent and director approval", async () => {
+  const teacher = { id: ids.tess, name: "Tess", role: "TEACHER" };
+  const director = { id: ids.director, name: "Dana", role: "DIRECTOR" };
+  const base = { childId: ids.kid2, personName: "Aunt May", relationship: "Aunt", idType: "Driver's license", idNumber: "D123-4567", consentMethod: "PHONE" };
+  await assert.rejects(requestRelease(db, { ...base, consentFrom: "Uncle Bob", actor: teacher }), /authorized guardian/);
+  await assert.rejects(requestRelease(db, { ...base, personName: "Ana Lee", consentFrom: "Ana Lee", actor: teacher }), /already authorized/);
+  const pending = await requestRelease(db, { ...base, consentFrom: "Ana Lee", actor: teacher });
+  assert.equal(pending.status, "PENDING");
+  assert.equal(pending.idLast4, "4567");
+  await assert.rejects(requestRelease(db, { ...base, consentFrom: "Ana Lee", actor: teacher }), /already waiting/);
+  await assert.rejects(decideRelease(db, { releaseId: pending.id, approve: true, actor: teacher }), /Only a director/);
+
+  await decideRelease(db, { releaseId: pending.id, approve: true, actor: director, at: t(16) });
+  const visit = (await dayLog(db, dayOf(t(12)), { childId: ids.kid2 }))[0];
+  assert.equal(visit.pickedUpBy, "Aunt May (one-time release)");
+  assert.ok(visit.checkOutAt);
+  const msg = await db.message.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
+  assert.match(msg.body, /released .* to Aunt May .* ending 4567/);
+
+  // A director's own request is approved and executed in one step.
+  const auto = await requestRelease(db, { ...base, childId: ids.baby, consentFrom: "Ana Lee", actor: director });
+  assert.equal(auto.status, "APPROVED");
+  assert.equal(await db.attendance.count({ where: { childId: ids.baby, checkOutAt: null } }), 0);
+});
+
+test("denied releases don't release, and repeated failures lock out", async () => {
+  await checkInChild(db, { childId: ids.kid2, droppedOffBy: "Ana Lee", at: t(17) });
+  const r = await requestRelease(db, {
+    childId: ids.kid2, personName: "Stranger", relationship: "Neighbor", idType: "Passport", idNumber: "X99999",
+    consentFrom: "Ana Lee", consentMethod: "PHONE", actor: { id: ids.tess, name: "Tess", role: "TEACHER" },
+  });
+  await decideRelease(db, { releaseId: r.id, approve: false, note: "Couldn't reach parent", actor: { id: ids.director, name: "Dana", role: "DIRECTOR" } });
+  await assert.rejects(checkOutChild(db, { childId: ids.kid2, pickedUpBy: "Stranger", releaseId: r.id }), /hasn't been approved/);
+  assert.equal(await db.attendance.count({ where: { childId: ids.kid2, checkOutAt: null } }), 1);
+
+  for (let i = 0; i < 5; i++) await db.auditLog.create({ data: { userId: ids.tess, action: "kiosk.pin_failed", entity: "Kiosk" } });
+  assert.equal(await isLockedOut(db, ids.tess, "kiosk.pin_failed"), true);
+  assert.equal(await isLockedOut(db, ids.director, "kiosk.pin_failed"), false);
 });

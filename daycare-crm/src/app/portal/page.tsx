@@ -8,7 +8,8 @@ import { payerLedgerBalance } from "@/lib/accounting/receivables";
 import { ActionForm } from "@/components/ActionForm";
 import { Badge, Card, Notice, Page, PageHeader, inputCls, tdCls, tdDate, tdRight, thCls, thRight, trCls } from "@/components/ui";
 import { postMessage } from "../families/actions";
-import { payBalanceAction, toggleMyAutopay } from "./actions";
+import { payBalanceAction, setMyPinAction, toggleMyAutopay } from "./actions";
+import { SelfCheckForm } from "./SelfCheckForm";
 
 export default async function PortalPage(props: PageProps<"/portal">) {
   const user = await requireRole(["PARENT"]);
@@ -123,6 +124,24 @@ export default async function PortalPage(props: PageProps<"/portal">) {
         </div>
 
         <div className="space-y-6">
+          <Card title="Check in / out">
+            <SelfCheckForm
+              canPickup={guardian.canPickup}
+              kids={guardian.family.children
+                .filter((c) => c.status === "ENROLLED" && c.classroomId)
+                .map((c) => ({ id: c.id, firstName: c.firstName, checkedIn: Boolean(c.attendance[0] && !c.attendance[0].checkOutAt) }))}
+            />
+            {!guardian.canPickup && <p className="mt-2 text-xs text-zinc-500">You can drop off; pickups need someone on the authorized list.</p>}
+            <details className="mt-4 border-t border-zinc-100 pt-3">
+              <summary className="cursor-pointer text-sm font-medium text-teal-700">
+                Front-desk kiosk PIN {guardian.pinSetAt ? "· set" : "· not set"}
+              </summary>
+              <ActionForm action={setMyPinAction} submitLabel="Save PIN" className="mt-2 flex flex-col gap-2">
+                <input name="pin" type="password" inputMode="numeric" maxLength={6} placeholder="New 6-digit PIN" required className={inputCls} />
+                <input name="confirm" type="password" inputMode="numeric" maxLength={6} placeholder="Confirm PIN" required className={inputCls} />
+              </ActionForm>
+            </details>
+          </Card>
           {payer && (
             <Card title="Your balance">
               <div className={`text-3xl font-semibold tabular-nums ${balance > 0 ? "text-zinc-900" : "text-emerald-700"}`}>

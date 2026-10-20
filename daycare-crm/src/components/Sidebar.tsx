@@ -18,6 +18,7 @@ const SECTIONS: { heading: string; links: { href: string; label: string }[] }[] 
       { href: "/attendance", label: "Check-in / out" },
       { href: "/attendance/live", label: "Where is everyone" },
       { href: "/attendance/log", label: "Daily log" },
+      { href: "/kiosk", label: "Parent kiosk" },
       { href: "/classrooms", label: "Rooms & Ratios" },
     ],
   },
@@ -47,7 +48,8 @@ const SECTIONS: { heading: string; links: { href: string; label: string }[] }[] 
 
 export async function Sidebar() {
   const session = await auth();
-  if (!session?.user) return null;
+  // The kiosk runs full-screen on a shared tablet.
+  if (!session?.user || session.user.role === "KIOSK") return null;
   const role = session.user.role;
   const allHrefs = SECTIONS.flatMap((s) => s.links.map((l) => l.href));
 

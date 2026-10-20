@@ -5,6 +5,7 @@ const DEMO = [
   ["Bookkeeper", "books@demo.com"],
   ["Teacher", "teacher@demo.com"],
   ["Parent", "parent@demo.com"],
+  ["Kiosk (PIN 246810)", "kiosk@demo.com"],
 ];
 
 export default function LoginPage() {

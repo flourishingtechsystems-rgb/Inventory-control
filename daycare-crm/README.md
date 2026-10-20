@@ -46,6 +46,19 @@ Most childcare platforms treat accounting as a payments list plus an export. Nes
   - **Multiple visits per day** are supported (e.g. out for an appointment and back).
   - **Families and parents** see the same information: today's status and history on the family page, and the live location plus today's timeline in the parent portal.
 - **Dashboard:** occupancy, MTD revenue/collections, A/R aging, books health, ratio status, pipeline, compliance alerts.
+- **Parent self check-in:**
+  - **Kiosk:** a front-desk tablet signed in as the *Check-in kiosk* role shows a PIN pad. Each adult has their own 6-digit PIN, issued by staff on the family page or set by the parent in the portal. After entering it, they tap a child to check in or out.
+    - Check-outs follow the same authorized-pickup rules as staff check-outs.
+    - The screen resets itself after 45 seconds.
+    - Five wrong PINs within 10 minutes lock the kiosk briefly.
+  - **Phone:** parents check in or out from the portal by entering the 6-digit **center code** shown on the kiosk (and on staff check-in screens). The code changes every 15 minutes, so it can't be done from home, and repeated wrong codes lock out.
+  - **Recorded as self-service:** every visit records who did it and how, e.g. "recorded by Self check-in (kiosk)".
+  - **PIN storage:** PINs are stored only as a keyed HMAC tied to `AUTH_SECRET`. If you rotate that secret, PINs must be re-issued.
+- **One-time release to someone not on the pickup list:**
+  - **Request:** staff record the person's name, relationship, ID type and number (only the last 4 characters are kept), and which authorized guardian gave consent and how (phone call, written note, in person).
+  - **Approval:** a teacher's request waits for a **director or admin to approve or deny**. It shows on the check-in screen and the dashboard. A director at the desk approves in one step.
+  - **On approval:** the child is checked out, the family gets an immediate message with the details, and the daily log flags the visit as a one-time release.
+  - **Audit trail:** every request and decision is audit-logged.
 - **Parent portal:** today's check-in status, billing history, pay balance, autopay, messages.
 - **Roles:** Admin, Director, Bookkeeper, Teacher, Parent. Enforced in `src/proxy.ts` *and* in every page and server action.
 
@@ -60,7 +73,7 @@ npm run db:seed         # demo center with two months of activity
 npm run dev
 ```
 
-Demo logins (password `password123`): `director@demo.com`, `books@demo.com`, `teacher@demo.com`, `parent@demo.com`, `admin@demo.com`.
+Demo logins (password `password123`): `director@demo.com`, `books@demo.com`, `teacher@demo.com`, `parent@demo.com`, `admin@demo.com`, and `kiosk@demo.com` for the front-desk tablet (demo PINs: Maria Garcia `246810`, Luis Garcia `135792`).
 
 ### Connecting QuickBooks / Xero
 
@@ -87,7 +100,8 @@ npm run build
   - `posting.ts`: the only writer to the GL (period lock, numbering, reversals)
   - `receivables.ts`: invoices, payments, credits, write-offs, refunds, deposits, late fees
   - `billing-run.ts`, `reports.ts`, `statement.ts`
-- `src/lib/attendance.ts`: check-in/out, movements between areas and caregivers, pickup authorization, caregiver load, daily log
+- `src/lib/presence.ts`: kiosk PINs, rotating center code, kiosk session tokens
+- `src/lib/attendance.ts`: check-in/out, self check-in, one-time pickup releases, movements between areas and caregivers, pickup authorization, caregiver load, daily log
 - `src/lib/integrations/`: OAuth (`oauth.ts`), token crypto, QuickBooks/Xero HTTP clients (`clients.ts`), payload mappers and file exports (`mappers.ts`), sync engine (`sync.ts`)
 - `src/app/`: pages and server actions by area (`leads`, `families`, `attendance`, `billing`, `accounting`, `integrations`, `portal`)
 

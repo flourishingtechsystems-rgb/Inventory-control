@@ -1,12 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
-import { CLASSROOM } from "@/lib/roles";
+import { APPROVERS, CLASSROOM } from "@/lib/roles";
 import { formatTime, today } from "@/lib/dates";
+import { centerCode } from "@/lib/presence";
+import Link from "next/link";
 import { fullName, staffOnShift } from "@/lib/attendance";
 import { ActionForm } from "@/components/ActionForm";
-import { Badge, Card, Page, PageHeader, Tabs, btnPrimary, btnSecondary, inputCls } from "@/components/ui";
+import { Badge, Card, Page, PageHeader, Tabs, btnDanger, btnPrimary, btnSecondary, inputCls, linkCls } from "@/components/ui";
 import { ATTENDANCE_TABS } from "./tabs";
-import { checkInAction, checkOutAction, clockIn, clockOutAction, moveAction } from "./actions";
+import { checkInAction, checkOutAction, clockIn, clockOutAction, decideReleaseAction, moveAction, requestReleaseAction } from "./actions";
 
 export default async function AttendancePage(props: PageProps<"/attendance">) {
   const user = await requireRole(CLASSROOM);
@@ -39,6 +41,12 @@ export default async function AttendancePage(props: PageProps<"/attendance">) {
   const needed = Math.ceil(present / room.ratio);
   const myShift = me.staffShifts[0];
   const myKids = await prisma.childMovement.count({ where: { caregiverId: user.id, endedAt: null } });
+  const pendingReleases = await prisma.pickupRelease.findMany({
+    where: { status: "PENDING" },
+    include: { child: true, requestedBy: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const canApprove = APPROVERS.includes(user.role);
 
   const areaSelect = (placeholder: string) => (
     <select name="areaId" defaultValue="" className={inputCls} aria-label="Area">
@@ -69,7 +77,37 @@ export default async function AttendancePage(props: PageProps<"/attendance">) {
       />
       <Tabs items={ATTENDANCE_TABS} active="/attendance" />
 
-      <div className="mb-6 grid gap-4 md:grid-cols-3">
+      {pendingReleases.length > 0 && (
+        <Card title={`⚠️ ${pendingReleases.length} pickup ${pendingReleases.length === 1 ? "release" : "releases"} awaiting director approval`} className="mb-6 border-amber-300">
+          <ul className="space-y-4">
+            {pendingReleases.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-start justify-between gap-4 text-sm">
+                <div>
+                  <div>
+                    <strong>{fullName(r.child)}</strong> → <strong>{r.personName}</strong> ({r.relationship})
+                  </div>
+                  <div className="text-xs text-zinc-500">
+                    {r.idType} ending {r.idLast4} · consent from {r.consentFrom} via {r.consentMethod.toLowerCase().replace("_", " ")} · requested by {r.requestedBy.name} at {formatTime(r.createdAt)}
+                  </div>
+                  {r.notes && <div className="text-xs text-zinc-500">“{r.notes}”</div>}
+                </div>
+                {canApprove ? (
+                  <div className="flex flex-wrap items-start gap-2">
+                    <ActionForm action={decideReleaseAction.bind(null, r.id, true)} submitLabel="Approve & release" className="flex flex-col gap-1" confirm={`Release ${r.child.firstName} to ${r.personName}?`} />
+                    <ActionForm action={decideReleaseAction.bind(null, r.id, false)} submitLabel="Deny" buttonClassName={btnDanger} className="flex items-start gap-2">
+                      <input name="note" placeholder="Reason" className={`${inputCls} w-40`} />
+                    </ActionForm>
+                  </div>
+                ) : (
+                  <Badge tone="amber">Waiting for a director</Badge>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card title="Room staffing">
           <div className="flex items-center justify-between gap-2 text-sm">
             <span className="text-zinc-600">{staffHere.map((s) => s.name).join(", ") || "Nobody clocked in"}</span>
@@ -90,6 +128,13 @@ export default async function AttendancePage(props: PageProps<"/attendance">) {
               <button className={btnPrimary}>Clock in here</button>
             </form>
           )}
+        </Card>
+        <Card title="Parent self check-in">
+          <div className="text-sm text-zinc-600">
+            Phone code right now:{" "}
+            <span className="font-mono text-lg font-semibold tracking-widest text-zinc-900">{centerCode()}</span>
+          </div>
+          <p className="mt-1 text-xs text-zinc-500">Changes every 15 minutes. Parents can also use their PIN at the <Link href="/kiosk" className={linkCls}>kiosk</Link>.</p>
         </Card>
         <Card title="Move selected children">
           <ActionForm id="bulk-move" action={moveAction} submitLabel="Move selected" buttonClassName={btnSecondary} className="flex flex-col gap-2">
@@ -147,6 +192,37 @@ export default async function AttendancePage(props: PageProps<"/attendance">) {
                         <input type="hidden" name="childId" value={c.id} />
                         {areaSelect("Same area")}
                         {caregiverSelect("Same caregiver")}
+                      </ActionForm>
+                    </details>
+                    <details>
+                      <summary className="cursor-pointer text-sm font-medium text-amber-700">Release to someone not on the list</summary>
+                      <ActionForm
+                        action={requestReleaseAction.bind(null, c.id)}
+                        submitLabel={canApprove ? "Approve & release" : "Request director approval"}
+                        buttonClassName={btnSecondary}
+                        className="mt-2 flex flex-col gap-2"
+                      >
+                        <input name="personName" placeholder="Full name (as on ID)" required className={inputCls} />
+                        <input name="relationship" placeholder="Relationship (aunt, neighbor…)" required className={inputCls} />
+                        <div className="grid grid-cols-2 gap-2">
+                          <select name="idType" className={inputCls} aria-label="ID type">
+                            <option>Driver&apos;s license</option>
+                            <option>State ID</option>
+                            <option>Passport</option>
+                            <option>Military ID</option>
+                          </select>
+                          <input name="idNumber" placeholder="ID number" required className={inputCls} />
+                        </div>
+                        <select name="consentFrom" className={inputCls} aria-label="Consent from">
+                          {authorized.map((g) => <option key={g.id}>{fullName(g)}</option>)}
+                        </select>
+                        <select name="consentMethod" className={inputCls} aria-label="Consent method">
+                          <option value="PHONE">Confirmed by phone call</option>
+                          <option value="WRITTEN">Written / emailed note</option>
+                          <option value="IN_PERSON">Told us in person earlier</option>
+                        </select>
+                        <input name="notes" placeholder="Notes (optional)" className={inputCls} />
+                        <p className="text-xs text-zinc-500">Only the last 4 ID characters are stored. The family is messaged when the child is released.</p>
                       </ActionForm>
                     </details>
                     <ActionForm action={checkOutAction.bind(null, c.id)} submitLabel="Check out" buttonClassName={btnSecondary} className="flex flex-col gap-2">
