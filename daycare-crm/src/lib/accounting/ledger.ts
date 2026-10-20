@@ -1,6 +1,7 @@
 // Pure double-entry helpers and report math.
 
 import { daysBetween } from "@/lib/dates";
+import { formatCents } from "@/lib/money";
 
 export type AccountType = "ASSET" | "LIABILITY" | "EQUITY" | "REVENUE" | "EXPENSE";
 
@@ -44,7 +45,7 @@ export function normaliseLines(lines: LineInput[]) {
   const credits = out.reduce((a, l) => a + l.creditCents, 0);
   if (debits !== credits) {
     throw new UnbalancedEntryError(
-      `Entry does not balance: debits ${debits} ≠ credits ${credits}.`,
+      `Entry does not balance: debits ${formatCents(debits)} ≠ credits ${formatCents(credits)}.`,
     );
   }
   return out;

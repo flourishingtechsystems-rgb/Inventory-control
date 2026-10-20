@@ -194,7 +194,7 @@ function csvCell(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }
 
-export type ExportEntry = SyncEntry & { lines: (SyncLine & { accountCode: string; accountName: string; classroomName: string | null })[] };
+export type ExportEntry = Omit<SyncEntry, "lines"> & { lines: (SyncLine & { accountCode: string; accountName: string; classroomName: string | null })[] };
 
 /** Xero "Import manual journals" CSV template. */
 export function xeroManualJournalCsv(entries: ExportEntry[]): string {

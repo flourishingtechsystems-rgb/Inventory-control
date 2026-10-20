@@ -110,13 +110,13 @@ async function log(provider: Provider, entityType: string, localId: string | nul
 
 export type SyncResult = { pushed: number; journals: number; errors: string[] };
 
-export async function syncProvider(provider: Provider): Promise<SyncResult> {
+export async function syncProvider(provider: Provider, opts: { client?: AccountingClient } = {}): Promise<SyncResult> {
   const integration = await prisma.integration.findUnique({ where: { provider } });
   if (!integration?.accessTokenEnc) return { pushed: 0, journals: 0, errors: ["Not connected."] };
 
   const result: SyncResult = { pushed: 0, journals: 0, errors: [] };
   try {
-    const client = await clientFor(integration);
+    const client = opts.client ?? (await clientFor(integration));
     const mappings = await loadMappings(provider);
     // Summary mode waits for the day to close so each day is one journal.
     const entries = await pendingEntries(integration, { includeToday: integration.syncMode === "DETAILED" });

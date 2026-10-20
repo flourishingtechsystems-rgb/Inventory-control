@@ -1,5 +1,7 @@
 # Inventory Control
 
+> This repository also contains **[Nestwise](daycare-crm/README.md)**, a childcare CRM with double-entry accounting and QuickBooks Online / Xero sync, in `daycare-crm/`.
+
 A small internal app for requesting, approving, and tracking recurring inventory
 purchases (toilet paper, paper towels, office supplies, etc.).
 
